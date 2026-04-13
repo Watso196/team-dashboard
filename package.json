@@ -1,0 +1,16 @@
+{
+  "name": "ado-dashboard",
+  "version": "1.0.0",
+  "description": "A lightweight, single-file dashboard for tracking individual team member velocity, activity, and trends directly from Azure DevOps. No build step, no dependencies, no subscription — just a HTML file and a one-line Python server.",
+  "main": "dashboard.js",
+  "scripts": {
+    "test": "jest --verbose"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "jest": "^30.3.0",
+    "jest-environment-jsdom": "^30.3.0"
+  }
+}

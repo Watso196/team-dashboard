@@ -1,0 +1,15 @@
+# Team Pulse — gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# NEVER commit .env 
+.env
+
+# macOS
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Dependencies
+node_modules/

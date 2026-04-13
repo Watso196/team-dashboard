@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Team Pulse — ADO Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+
+  <!-- ── CONFIG SCREEN ───────────────────────────────────────────────────── -->
+  <main id="config-screen">
+    <form class="config-card" onsubmit="event.preventDefault(); startDashboard();" novalidate>
+      <h1 class="logo">TEAM <span>PULSE</span></h1>
+      <div class="tagline">ADO Progress Dashboard</div>
+
+      <div class="cors-notice">
+        <strong>⚠ Serve this file locally — don't open it as file://</strong>
+        In a terminal in this folder:<br><br>
+        <code>python serve.py</code> &nbsp;or&nbsp; <code>python -m http.server 8765</code><br><br>
+        Then open <code>http://localhost:8765/ado-dashboard.html</code>
+      </div>
+
+      <p class="hint" style="margin-bottom:1.25rem;">Fields marked with <span aria-hidden="true">*</span><span class="sr-only">an asterisk</span> are required.</p>
+
+      <div class="field-group">
+        <label for="org-url">Organization URL <span aria-hidden="true">*</span></label>
+        <input type="text" id="org-url" aria-required="true" />
+      </div>
+      <div class="field-group">
+        <label for="project">Project Name <span aria-hidden="true">*</span></label>
+        <input type="text" id="project" aria-required="true" aria-describedby="project-hint" />
+        <div class="hint" id="project-hint">Primary project — used as the anchor for iteration lookups in Iteration mode.</div>
+      </div>
+
+      <!-- ── Sprint mode toggle ── -->
+      <fieldset class="field-group">
+        <legend>Sprint Mode</legend>
+        <div class="sprint-mode-toggle">
+          <label class="radio-option">
+            <input type="radio" name="sprint-mode" id="mode-iterations" value="iterations" checked onchange="onSprintModeChange()">
+            <span class="radio-label">ADO Iterations</span>
+            <span class="radio-desc">Uses your team's iteration schedule from ADO</span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="sprint-mode" id="mode-dates" value="dates" onchange="onSprintModeChange()">
+            <span class="radio-label">Date-Based Sprints</span>
+            <span class="radio-desc">Fixed 2-week buckets — no iteration config needed</span>
+          </label>
+        </div>
+      </fieldset>
+
+      <!-- Iteration mode fields -->
+      <div id="iter-fields">
+        <div class="field-group">
+          <label for="team">Team Name <span aria-hidden="true">*</span></label>
+          <input type="text" id="team" aria-required="true" aria-describedby="team-hint" />
+          <div class="hint" id="team-hint">Exact name from Project Settings → Teams.</div>
+        </div>
+        <div class="field-group">
+          <label for="iteration-count">Past Iterations to Load</label>
+          <input type="text" id="iteration-count" value="12" inputmode="numeric" pattern="[0-9]*" aria-describedby="iteration-count-hint" />
+          <div class="hint" id="iteration-count-hint">Number of historical sprints to gather data from (default: 12).</div>
+        </div>
+      </div>
+
+      <!-- Date-based mode fields -->
+      <div id="date-fields" style="display:none;">
+        <div class="field-group">
+          <label for="sprint-start-date">Sprint Start Date <span aria-hidden="true">*</span></label>
+          <input type="date" id="sprint-start-date" aria-required="true" aria-describedby="sprint-start-date-hint" />
+          <div class="hint" id="sprint-start-date-hint">First day of your most recent sprint. Sprints are calculated as 2-week blocks going backward from this date.</div>
+        </div>
+        <div class="field-group">
+          <label for="sprint-count">Past Sprints to Load</label>
+          <input type="text" id="sprint-count" value="12" inputmode="numeric" pattern="[0-9]*" aria-describedby="sprint-count-hint" />
+          <div class="hint" id="sprint-count-hint">Number of historical 2-week sprints to gather data from (default: 12).</div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label for="pat">Personal Access Token (PAT) <span aria-hidden="true">*</span></label>
+        <input type="password" id="pat" aria-required="true" aria-describedby="pat-hint" />
+        <div class="hint" id="pat-hint">Scopes: Work Items (Read) · Code (Read) · Project and Team (Read)</div>
+      </div>
+      <div class="field-group">
+        <label for="members">Team Members (one display name per line) <span aria-hidden="true">*</span></label>
+        <textarea id="members" rows="5" aria-required="true" aria-describedby="members-hint"></textarea>
+        <div class="hint" id="members-hint">Exact display names as they appear in ADO (case-insensitive match).</div>
+      </div>
+      <div class="field-group">
+        <label for="related-projects">Related Projects (one per line)</label>
+        <textarea id="related-projects" rows="3" aria-describedby="related-projects-hint"></textarea>
+        <div class="hint" id="related-projects-hint">All projects to pull work items and PR data from. Leave blank to limit to the primary project only.</div>
+      </div>
+      <div class="field-group">
+        <span class="field-group-label" id="optional-features-label">Optional Features</span>
+        <div class="toggle-option" role="group" aria-labelledby="optional-features-label">
+          <div class="toggle-row">
+            <span class="toggle-label" id="dr-toggle-label">Track Design Review tag cycling</span>
+            <button
+              role="switch"
+              type="button"
+              id="design-review-enabled"
+              aria-checked="false"
+              aria-labelledby="dr-toggle-label"
+              class="toggle-switch"
+              onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')==='true' ? 'false' : 'true')"
+            >
+              <span class="toggle-thumb"></span>
+            </button>
+          </div>
+          <span class="toggle-desc">Counts how many times the "Design Review" tag is added to each team member's PBIs and Bugs over the last 3 months. Adds extra load time.</span>
+        </div>
+      </div>
+      <button type="submit" class="btn-primary">LOAD DASHBOARD</button>
+      <div id="config-error" role="alert" aria-live="assertive"></div>
+    </form>
+  </main>
+
+  <!-- ── DASHBOARD SCREEN ────────────────────────────────────────────────── -->
+  <div id="dashboard-screen">
+
+    <a href="#tab-panels" class="sr-only sr-only-focusable">Skip to content</a>
+
+    <header class="top-bar" role="banner">
+      <h1 class="logo">TEAM <span>PULSE</span></h1>
+      <div class="sprint-label" id="sprint-label">Loading…</div>
+      <button class="btn-reset" onclick="resetToConfig()"><span aria-hidden="true">↩</span> Reconfigure</button>
+    </header>
+
+    <nav class="tab-bar" id="tab-bar" aria-label="Dashboard sections"></nav>
+
+    <div id="loading-screen" style="display:flex;">
+      <div class="loader-ring" role="status" aria-label="Loading"></div>
+      <div class="loading-msg">Connecting to Azure DevOps…</div>
+      <div class="loading-step" id="loading-step" aria-live="polite">Initialising…</div>
+    </div>
+
+    <div id="error-area" role="alert" aria-live="assertive"></div>
+    <main id="tab-panels"></main>
+
+  </div>
+
+  <script src="state.js"></script>
+  <script src="constants.js"></script>
+  <script src="api.js"></script>
+  <script src="data.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>
