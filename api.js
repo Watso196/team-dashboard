@@ -41,6 +41,31 @@ const addDays   = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); retu
 const subMonths = (d,n) => { const r=new Date(d); r.setMonth(r.getMonth()-n); return r; };
 const isoDate   = d => d.toISOString().split('T')[0];
 const normPath  = p => (p||'').replace(/\\/g,'/').trim().toLowerCase();
+const earliest  = (...ds) => new Date(Math.min(...ds.filter(Boolean).map(d=>d.getTime())));
+
+// ── SELECTED RANGE ────────────────────────────────────────────────────────────
+// The span actually covered by the sprints/iterations the user asked for. Used
+// alongside the fixed 3mo/6mo presets so every metric can also be reported over
+// exactly the window on screen.
+function iterFinish(iter) {
+  return iter.attributes.finishDate
+    ? new Date(iter.attributes.finishDate)
+    : addDays(new Date(iter.attributes.startDate), SPRINT_DAYS);
+}
+
+function describeRange(historyIters) {
+  const iters = historyIters || [];
+  if (!iters.length) return { start: null, end: null, count: 0, label: 'selected range', short: 'range' };
+  const start = new Date(iters[0].attributes.startDate);
+  const end   = iterFinish(iters[iters.length - 1]);
+  const f = d => d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  const count = iters.length;
+  return {
+    start, end, count,
+    label: `${count} sprint${count === 1 ? '' : 's'} · ${f(start)} – ${f(end)}`,
+    short: `${count} sprint${count === 1 ? '' : 's'}`,
+  };
+}
 
 // ── ASSIGNEE FILTER ───────────────────────────────────────────────────────────
 function assigneeClause(field='System.AssignedTo') {
@@ -105,7 +130,12 @@ async function fetchPRCommentsByMember(repoId, repoName, repoProject, prId) {
         if (!member) continue;
         if (!byMember[member]) byMember[member] = [];
         const text = (comment.content||'').trim();
-        if (text) byMember[member].push({ text, prUrl });
+        // prId/date travel with each comment so a range-wide list stays
+        // readable — without them a few hundred comments are just a wall.
+        if (text) byMember[member].push({
+          text, prUrl, prId, repoName,
+          date: comment.publishedDate ? new Date(comment.publishedDate) : null,
+        });
       }
     }
     return byMember;

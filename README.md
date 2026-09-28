@@ -72,7 +72,7 @@ On first load you'll see a config form. Fill in:
 | Project Name | `Design` | Exact name, case-sensitive |
 | Team Name | `Accessibility` | From **Project Settings → Teams**. Try appending `" Team"` if you get a 404. |
 | Sprint Mode | Iterations / Dates | **Iterations** uses ADO iteration paths; **Dates** calculates 2-week sprints from a start date |
-| Past Iterations to Load | `12` | How many historical sprints to pull (iterations mode) |
+| Past Iterations to Load | `12` | How many historical sprints to pull (iterations mode). Metrics are also reported across this full range — see [Timeframes](#timeframes) |
 | Sprint Start Date | `2026-03-30` | First day of your most recent sprint (dates mode only) |
 | Past Sprints to Load | `12` | How many historical 2-week periods to pull (dates mode only) |
 | Personal Access Token | `xxxxxxxxxxxx` | See PAT setup below |
@@ -118,11 +118,39 @@ Tokens expire — if you get a `401 Unauthorized` error, generate a new one.
 
 | Metric | Lookback |
 |--------|---------|
-| Effort per sprint | This sprint / 3-month avg / 6-month avg |
-| Hours per sprint | This sprint / 3-month avg / 6-month avg |
+| Effort per sprint | This sprint / 3-month avg / 6-month avg / selected-range avg + total |
+| Hours per sprint | This sprint / 3-month avg / 6-month avg / selected-range avg + total |
+| Items done per sprint | This sprint / 3-month avg / 6-month avg / selected-range avg + total |
 | Avg hours per item | This sprint / 3-month avg (estimated) |
 
 Trend data is pulled from all ADO iterations whose start date falls within the lookback window.
+
+### Timeframes
+
+Every windowed metric is reported over **three** scopes side by side:
+
+| Scope | Meaning |
+|-------|---------|
+| 3-month | Fixed 90-day preset |
+| 6-month | Fixed 180-day preset |
+| Selected range | Exactly the sprints you asked for in **Past Iterations to Load** / **Past Sprints to Load** |
+
+The selected range is whatever the iteration count resolves to — ask for 20 iterations and you get metrics across all 20, even though that reaches back further than 6 months. Range-scoped rows are marked with a left rule in the member tables, and the team tab gets a dedicated **Selected Range** panel. The header shows the resolved span (e.g. `Loaded: 20 sprints · Nov 3, 2025 – Sep 22, 2026`).
+
+Metrics covered by all three scopes: effort points, items done, hours, PRs authored, PRs reviewed, peer review tasks and hours, PBIs/Bugs created, start→done turnaround, and Design Review cycling.
+
+Queries pull from whichever is earlier — the start of your selected range or 6 months ago — so the fixed presets stay accurate even when you load only a couple of sprints. Loading a long range increases load time roughly in proportion to the number of sprints, mostly from per-item history scans used for turnaround and Design Review tracking.
+
+### PR review comments
+
+The **Load Comments** button on each member tab pulls their review comments across the full selected range. This costs one API call per reviewed PR, so it stays on-demand rather than loading with the dashboard:
+
+- The button shows the cost up front — `↓ Load Comments (87 PRs)`.
+- Progress updates per batch (`…35/87 PRs`), and results render as they arrive.
+- A **Stop** button cancels mid-fetch and keeps whatever already loaded.
+- Comments are sorted newest first and tagged with PR number, repo, and date.
+
+If no range is available the button falls back to the 3-month window.
 
 ---
 
