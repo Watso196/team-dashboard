@@ -61,7 +61,7 @@
         <div class="field-group">
           <label for="iteration-count">Past Iterations to Load</label>
           <input type="text" id="iteration-count" value="12" inputmode="numeric" pattern="[0-9]*" aria-describedby="iteration-count-hint" />
-          <div class="hint" id="iteration-count-hint">Number of historical sprints to gather data from (default: 12).</div>
+          <div class="hint" id="iteration-count-hint">Number of historical sprints to gather data from (default: 12). Metrics are reported over this full range as well as the fixed 3- and 6-month windows. Large values take longer to load.</div>
         </div>
       </div>
 
@@ -75,7 +75,7 @@
         <div class="field-group">
           <label for="sprint-count">Past Sprints to Load</label>
           <input type="text" id="sprint-count" value="12" inputmode="numeric" pattern="[0-9]*" aria-describedby="sprint-count-hint" />
-          <div class="hint" id="sprint-count-hint">Number of historical 2-week sprints to gather data from (default: 12).</div>
+          <div class="hint" id="sprint-count-hint">Number of historical 2-week sprints to gather data from (default: 12). Metrics are reported over this full range as well as the fixed 3- and 6-month windows. Large values take longer to load.</div>
         </div>
       </div>
 
@@ -111,7 +111,7 @@
               <span class="toggle-thumb"></span>
             </button>
           </div>
-          <span class="toggle-desc">Counts how many times the "Design Review" tag is added to each team member's PBIs and Bugs over the last 3 months. Adds extra load time.</span>
+          <span class="toggle-desc">Counts how many times the "Design Review" tag is added to each team member's PBIs and Bugs, reported over the last 3 months and over your selected sprint range. Adds extra load time.</span>
         </div>
       </div>
       <button type="submit" class="btn-primary">LOAD DASHBOARD</button>

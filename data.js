@@ -11,14 +11,16 @@ function initMemberBuckets() {
       doneItems: [], changedPBIs: [], changedBugs: [], changedFeatures: [], sprintTasks: [],
       allSprintPBIs: [],
       history: {},
-      completionDays: [],
-      prsReviewed3mo: 0, prsReviewed6mo: 0,
-      prsAuthoredThisSprint: 0, prsAuthored3mo: 0, prsAuthored6mo: 0,
+      completionDays: [], completionDaysRange: [],
+      prsReviewed3mo: 0, prsReviewed6mo: 0, prsReviewedRange: 0,
+      prsAuthoredThisSprint: 0, prsAuthored3mo: 0, prsAuthored6mo: 0, prsAuthoredRange: 0,
       prComments: [],
       pbisCreated3mo: 0, bugsCreated3mo: 0,
+      pbisCreatedRange: 0, bugsCreatedRange: 0,
       peerReviewTasksThisSprint: 0,
-      peerReviewTaskCount3mo: 0, peerReviewTaskCount6mo: 0,
+      peerReviewTaskCount3mo: 0, peerReviewTaskCount6mo: 0, peerReviewTaskCountRange: 0,
       peerReviewHours3mo: 0, peerReviewHoursPerTask3mo: null,
+      peerReviewHoursRange: 0, peerReviewHoursPerTaskRange: null,
       designReviewItems: [],
       designReviewFlagged: [],
     };
@@ -26,9 +28,8 @@ function initMemberBuckets() {
   return md;
 }
 
-async function resolveIterations(now, threeMonthsAgo, sixMonthsAgo, twelveMonthsAgo) {
+async function resolveIterations(now, threeMonthsAgo, sixMonthsAgo) {
   let currentIter, sprintStart, sprintEnd, allIters, historyIters;
-  let iters3moNorm, iters6moNorm;
 
   if (CFG.sprintMode === 'dates') {
     const count = CFG.sprintCount || 12;
@@ -37,32 +38,38 @@ async function resolveIterations(now, threeMonthsAgo, sixMonthsAgo, twelveMonths
     sprintStart = new Date(currentIter.attributes.startDate);
     sprintEnd   = new Date(currentIter.attributes.finishDate);
     historyIters = allIters;
-    iters3moNorm = new Set(allIters.filter(i => new Date(i.attributes.startDate) >= threeMonthsAgo).map(i => normPath(i.path)));
-    iters6moNorm = new Set(allIters.filter(i => new Date(i.attributes.startDate) >= sixMonthsAgo).map(i => normPath(i.path)));
   } else {
     currentIter = await fetchCurrentIteration();
     sprintStart = new Date(currentIter.attributes.startDate);
     sprintEnd   = currentIter.attributes.finishDate ? new Date(currentIter.attributes.finishDate) : addDays(sprintStart,SPRINT_DAYS);
     allIters = await fetchAllIterations();
-    const filterIters = (cutoff) => allIters
-      .filter(i=>{ const s=new Date(i.attributes.startDate); return s>=cutoff && s<=now; })
+    // Take the N most recent iterations that have already started. Previously
+    // this was also clamped to the last 12 months, which silently capped large
+    // requests (e.g. 20 iterations) at whatever fit inside a year.
+    const started = allIters
+      .filter(i => new Date(i.attributes.startDate) <= now)
       .sort((a,b)=>new Date(a.attributes.startDate)-new Date(b.attributes.startDate));
-    const iters6mo  = filterIters(sixMonthsAgo);
-    const iters12mo = filterIters(twelveMonthsAgo);
     const maxHistory = CFG.iterationCount || DEFAULT_HISTORY;
-    historyIters = iters12mo.slice(-maxHistory);
-    iters3moNorm = new Set(filterIters(threeMonthsAgo).map(i=>normPath(i.path)));
-    iters6moNorm = new Set(iters6mo.map(i=>normPath(i.path)));
+    historyIters = started.slice(-maxHistory);
   }
+
+  // 3mo/6mo presets are subsets of whatever ended up in the history window.
+  const inWindow = cutoff => new Set(
+    historyIters.filter(i => new Date(i.attributes.startDate) >= cutoff).map(i => normPath(i.path))
+  );
+  const iters3moNorm = inWindow(threeMonthsAgo);
+  const iters6moNorm = inWindow(sixMonthsAgo);
+  const range = describeRange(historyIters);
 
   console.group('[TeamPulse] Iterations');
   console.log('Mode:', CFG.sprintMode);
   console.log('Current:', currentIter.name, normPath(currentIter.path));
-  console.log('History window:', historyIters.length, 'sprints');
+  console.log('History window:', historyIters.length, 'sprints —', range.label);
+  console.log('Requested:', CFG.sprintMode === 'dates' ? (CFG.sprintCount||12) : (CFG.iterationCount||DEFAULT_HISTORY));
   historyIters.forEach(i=>console.log(' ',i.name, normPath(i.path)));
   console.groupEnd();
 
-  return { currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm };
+  return { currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm, range };
 }
 
 async function fetchChangedPBIsAndBugs(ctx) {
@@ -177,43 +184,60 @@ async function fetchSprintTasks(ctx) {
 }
 
 async function fetchCreatedItems(ctx) {
-  const { md, threeMonthsAgo } = ctx;
+  const { md, threeMonthsAgo, fetchStart, inRange } = ctx;
   setStep('Querying created items…');
   const createdIds = await orgWiqlQuery(
-    `SELECT [System.Id] FROM WorkItems WHERE ${assigneeClause('System.CreatedBy')} AND [System.WorkItemType] IN ('Product Backlog Item','Bug') AND [System.CreatedDate] >= '${isoDate(threeMonthsAgo)}'`
+    `SELECT [System.Id] FROM WorkItems WHERE ${assigneeClause('System.CreatedBy')} AND [System.WorkItemType] IN ('Product Backlog Item','Bug') AND [System.CreatedDate] >= '${isoDate(fetchStart)}'`
   );
   const createdItems = await fetchWIBatch(createdIds, PBI_FIELDS);
   for (const wi of createdItems) {
     const m = matchMember(wi.fields['System.CreatedBy']); if (!m) continue;
-    if (wi.fields['System.WorkItemType']==='Product Backlog Item') md[m].pbisCreated3mo++;
-    else if (wi.fields['System.WorkItemType']==='Bug') md[m].bugsCreated3mo++;
+    const created = new Date(wi.fields['System.CreatedDate']);
+    const is3mo   = created >= threeMonthsAgo;
+    const isRange = inRange(created);
+    const type    = wi.fields['System.WorkItemType'];
+    if (type === 'Product Backlog Item') {
+      if (is3mo)   md[m].pbisCreated3mo++;
+      if (isRange) md[m].pbisCreatedRange++;
+    } else if (type === 'Bug') {
+      if (is3mo)   md[m].bugsCreated3mo++;
+      if (isRange) md[m].bugsCreatedRange++;
+    }
   }
 }
 
 async function fetchPeerReviewTasks(ctx) {
-  const { md, now, threeMonthsAgo, sixMonthsAgo } = ctx;
+  const { md, now, threeMonthsAgo, sixMonthsAgo, fetchStart, inRange } = ctx;
   setStep('Querying peer review tasks…');
   const prTaskIds = await orgWiqlQuery(
-    `SELECT [System.Id] FROM WorkItems WHERE ${assigneeClause()} AND [System.WorkItemType]='Task' AND [System.Title] CONTAINS 'peer review' AND [System.State]='Done' AND [System.ChangedDate] >= '${isoDate(sixMonthsAgo)}'`
+    `SELECT [System.Id] FROM WorkItems WHERE ${assigneeClause()} AND [System.WorkItemType]='Task' AND [System.Title] CONTAINS 'peer review' AND [System.State]='Done' AND [System.ChangedDate] >= '${isoDate(fetchStart)}'`
   );
   const prTasks = await fetchWIBatch(prTaskIds, TASK_FIELDS);
   for (const t of prTasks) {
     const m = matchMember(t.fields['System.AssignedTo']); if (!m) continue;
     const changed  = new Date(t.fields['System.ChangedDate']||t.fields['System.CreatedDate']||now);
     const hours    = t.fields['Microsoft.VSTS.Scheduling.CompletedWork']||0;
-    const is3mo    = changed >= threeMonthsAgo;
-    if (is3mo) { md[m].peerReviewTaskCount3mo++; md[m].peerReviewHours3mo += hours; }
-    md[m].peerReviewTaskCount6mo++;
+    if (changed >= threeMonthsAgo) {
+      md[m].peerReviewTaskCount3mo++;
+      md[m].peerReviewHours3mo += hours;
+    }
+    if (changed >= sixMonthsAgo) md[m].peerReviewTaskCount6mo++;
+    if (inRange(changed)) {
+      md[m].peerReviewTaskCountRange++;
+      md[m].peerReviewHoursRange += hours;
+    }
   }
   for (const m of CFG.members) {
     md[m].peerReviewHoursPerTask3mo = md[m].peerReviewTaskCount3mo > 0
       ? md[m].peerReviewHours3mo / md[m].peerReviewTaskCount3mo : null;
+    md[m].peerReviewHoursPerTaskRange = md[m].peerReviewTaskCountRange > 0
+      ? md[m].peerReviewHoursRange / md[m].peerReviewTaskCountRange : null;
   }
 }
 
 async function fetchPRData(ctx) {
-  const { md, sprintStart, sprintEnd, threeMonthsAgo, sixMonthsAgo } = ctx;
-  setStep('Fetching PR data…');
+  const { md, sprintStart, sprintEnd, threeMonthsAgo, sixMonthsAgo, fetchStart, inRange, range } = ctx;
+  setStep(`Fetching PR data (${range.short})…`);
   const repos = await fetchAllRepos();
   console.log(`[TeamPulse] Found ${repos.length} repos`);
 
@@ -225,7 +249,7 @@ async function fetchPRData(ctx) {
     try {
       let skip=0;
       while (true) {
-        const url = `${CFG.org}/_apis/git/repositories/${repo.id}/pullrequests?searchCriteria.status=completed&searchCriteria.minTime=${sixMonthsAgo.toISOString()}&$top=100&$skip=${skip}&api-version=7.0`;
+        const url = `${CFG.org}/_apis/git/repositories/${repo.id}/pullrequests?searchCriteria.status=completed&searchCriteria.minTime=${fetchStart.toISOString()}&$top=100&$skip=${skip}&api-version=7.0`;
         const d = await adoGet(url);
         const prs = d.value||[];
         if (!prs.length) break;
@@ -243,12 +267,10 @@ async function fetchPRData(ctx) {
           // ── Authorship tracking ──
           const author = matchMember(pr.createdBy?.displayName||pr.createdBy?.uniqueName||'');
           if (author) {
-            const is3mo = closedDate >= threeMonthsAgo;
-            const is6mo = closedDate >= sixMonthsAgo;
-            const isThisSprint = closedDate >= sprintStart && closedDate <= addDays(sprintEnd, 1);
-            if (isThisSprint) md[author].prsAuthoredThisSprint++;
-            if (is3mo) md[author].prsAuthored3mo++;
-            else if (is6mo) md[author].prsAuthored6mo++;
+            if (closedDate >= sprintStart && closedDate <= addDays(sprintEnd, 1)) md[author].prsAuthoredThisSprint++;
+            if (closedDate >= threeMonthsAgo) md[author].prsAuthored3mo++;
+            if (closedDate >= sixMonthsAgo)   md[author].prsAuthored6mo++;
+            if (inRange(closedDate))          md[author].prsAuthoredRange++;
           }
         }
         if (prs.length < 100) break;
@@ -259,11 +281,11 @@ async function fetchPRData(ctx) {
 
   for (const m of CFG.members) {
     const allPRs = reviewerPRList[m];
-    md[m].prsReviewed6mo = allPRs.length;
-    md[m].prsReviewed3mo = allPRs.filter(p=>p.closedDate>=threeMonthsAgo).length;
+    md[m].prsReviewed6mo   = allPRs.filter(p=>p.closedDate>=sixMonthsAgo).length;
+    md[m].prsReviewed3mo   = allPRs.filter(p=>p.closedDate>=threeMonthsAgo).length;
+    md[m].prsReviewedRange = allPRs.filter(p=>inRange(p.closedDate)).length;
     md[m]._prList = allPRs;
-    md[m].prsAuthored6mo = md[m].prsAuthored3mo + md[m].prsAuthored6mo;
-    console.log(`[TeamPulse] ${m}: reviewed 6mo=${md[m].prsReviewed6mo}, 3mo=${md[m].prsReviewed3mo} | authored 6mo=${md[m].prsAuthored6mo}, 3mo=${md[m].prsAuthored3mo}, sprint=${md[m].prsAuthoredThisSprint}`);
+    console.log(`[TeamPulse] ${m}: reviewed 6mo=${md[m].prsReviewed6mo}, 3mo=${md[m].prsReviewed3mo}, range=${md[m].prsReviewedRange} | authored 6mo=${md[m].prsAuthored6mo}, 3mo=${md[m].prsAuthored3mo}, range=${md[m].prsAuthoredRange}, sprint=${md[m].prsAuthoredThisSprint}`);
   }
 }
 
@@ -344,13 +366,16 @@ async function fetchHistoricalData(ctx) {
 }
 
 async function calculateCompletionTimes(ctx) {
-  const { md, threeMonthsAgo } = ctx;
+  const { md, threeMonthsAgo, fetchStart, inRange, range } = ctx;
   setStep('Calculating completion times…');
   const recentDoneIds = await orgWiqlQuery(
-    `SELECT [System.Id] FROM WorkItems WHERE ${assigneeClause()} AND [System.WorkItemType] IN ('Product Backlog Item','Bug') AND [System.State]='Done' AND [System.ChangedDate] >= '${isoDate(threeMonthsAgo)}' ORDER BY [System.ChangedDate] DESC`
+    `SELECT [System.Id] FROM WorkItems WHERE ${assigneeClause()} AND [System.WorkItemType] IN ('Product Backlog Item','Bug') AND [System.State]='Done' AND [System.ChangedDate] >= '${isoDate(fetchStart)}' ORDER BY [System.ChangedDate] DESC`
   );
+  // Done-date per item, reused by the Design Review scan so it can split its
+  // counts into the 3mo preset vs the selected sprint range.
+  const doneDateById = {};
   for (let i=0; i<recentDoneIds.length; i+=COMPLETION_CONCURRENCY) {
-    setStep(`Completion times… (${Math.min(i+COMPLETION_CONCURRENCY,recentDoneIds.length)}/${recentDoneIds.length})`);
+    setStep(`Completion times, ${range.short}… (${Math.min(i+COMPLETION_CONCURRENCY,recentDoneIds.length)}/${recentDoneIds.length})`);
     await Promise.all(recentDoneIds.slice(i,i+COMPLETION_CONCURRENCY).map(async id => {
       try {
         const updates = await fetchWIUpdates(id);
@@ -364,22 +389,32 @@ async function calculateCompletionTimes(ctx) {
             if (state==='Done') doneDate=timestamp;
           }
         }
+        if (doneDate) doneDateById[id] = doneDate;
         if (assignee&&activeDate&&doneDate) {
           const days=(doneDate-activeDate)/MS_PER_DAY;
-          if (days>=0&&days<365) md[assignee].completionDays.push(days);
+          if (days>=0&&days<365) {
+            if (doneDate >= threeMonthsAgo) md[assignee].completionDays.push(days);
+            if (inRange(doneDate))          md[assignee].completionDaysRange.push(days);
+          }
         }
       } catch(e) { console.warn(`[TeamPulse] Completion time calc failed for WI ${id}:`, e.message); }
     }));
   }
-  return recentDoneIds;
+  return { recentDoneIds, doneDateById };
 }
 
-async function analyzeDesignReviews(ctx, recentDoneIds) {
-  const { md } = ctx;
+async function analyzeDesignReviews(ctx, recentDoneIds, doneDateById) {
+  const { md, threeMonthsAgo } = ctx;
   setStep('Analysing Design Review tag cycling…');
 
   const currentSprintPBIIds = CFG.members.flatMap(m => md[m].allSprintPBIs.map(i => i.id));
+  const currentSprintIdSet  = new Set(currentSprintPBIIds);
   const allDRCandidateIds   = [...new Set([...recentDoneIds, ...currentSprintPBIIds])];
+
+  // Items in the current sprint are inside both windows; everything else is
+  // placed by its Done date. Unknown dates fall back to the 3mo bucket so the
+  // preset never under-reports relative to its previous behaviour.
+  const isIn3mo = id => currentSprintIdSet.has(id) || !doneDateById?.[id] || doneDateById[id] >= threeMonthsAgo;
 
   const drItemMeta = {};
   CFG.members.forEach(m => {
@@ -435,7 +470,7 @@ async function analyzeDesignReviews(ctx, recentDoneIds) {
     const id   = parseInt(idStr, 10);
     const meta = drItemMeta[id];
     if (!meta || !meta.member || !md[meta.member]) continue;
-    const item = { id, addCount, title: meta.title, url: meta.url, project: meta.project };
+    const item = { id, addCount, title: meta.title, url: meta.url, project: meta.project, in3mo: isIn3mo(id) };
     md[meta.member].designReviewItems.push(item);
     if (addCount > 1) md[meta.member].designReviewFlagged.push(item);
   }
@@ -450,16 +485,24 @@ async function buildDashboard() {
   const now            = new Date();
   const threeMonthsAgo = subMonths(now, 3);
   const sixMonthsAgo   = subMonths(now, 6);
-  const twelveMonthsAgo= subMonths(now, 12);
 
   setStep('Fetching iterations…');
-  const { currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm } =
-    await resolveIterations(now, threeMonthsAgo, sixMonthsAgo, twelveMonthsAgo);
+  const { currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm, range } =
+    await resolveIterations(now, threeMonthsAgo, sixMonthsAgo);
+
+  // Every windowed query pulls from the earlier of (selected range, 6 months)
+  // so the 3mo/6mo presets stay correct for short ranges while long ranges get
+  // the full span of data they asked for.
+  const rangeStart = range.start || sprintStart;
+  const rangeEnd   = addDays(range.end || sprintEnd, 1);
+  const fetchStart = earliest(rangeStart, sixMonthsAgo);
+  const inRange    = d => d >= rangeStart && d <= rangeEnd;
 
   const sprintPath  = currentIter.path;
   const currentNorm = normPath(sprintPath);
   const md = initMemberBuckets();
-  const ctx = { md, now, threeMonthsAgo, sixMonthsAgo, sprintStart, sprintEnd, sprintPath, currentNorm, historyIters, iters3moNorm, iters6moNorm };
+  const ctx = { md, now, threeMonthsAgo, sixMonthsAgo, sprintStart, sprintEnd, sprintPath, currentNorm,
+                historyIters, iters3moNorm, iters6moNorm, range, rangeStart, rangeEnd, fetchStart, inRange };
 
   await fetchChangedPBIsAndBugs(ctx);
   await fetchChangedFeatures(ctx);
@@ -470,9 +513,9 @@ async function buildDashboard() {
   await fetchPeerReviewTasks(ctx);
   if (CFG.relatedProjects?.length) await fetchPRData(ctx);
   await fetchHistoricalData(ctx);
-  const recentDoneIds = await calculateCompletionTimes(ctx);
-  if (CFG.designReviewEnabled) await analyzeDesignReviews(ctx, recentDoneIds);
+  const { recentDoneIds, doneDateById } = await calculateCompletionTimes(ctx);
+  if (CFG.designReviewEnabled) await analyzeDesignReviews(ctx, recentDoneIds, doneDateById);
 
   setStep('Rendering…');
-  return { md, currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm };
+  return { md, currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm, range };
 }

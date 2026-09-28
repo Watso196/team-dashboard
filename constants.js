@@ -10,7 +10,6 @@ const CHART_BAR_GAP       = 6;
 const CHART_SCALE         = 0.85;  // Vertical scale factor for bar/sparkline
 const PR_COMMENT_BATCH    = 5;
 const COMPLETION_CONCURRENCY = 10;
-const THREE_MONTHS_DAYS   = 90;
 
 const PBI_FIELDS = [
   'System.Id', 'System.WorkItemType', 'System.AssignedTo', 'System.CreatedBy',

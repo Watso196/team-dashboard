@@ -64,7 +64,8 @@ config = {
     "designReviewEnabled": env.get("ADO_DESIGN_REVIEW", "").lower() in ("true", "1", "yes"),
 
     # Related projects — all projects to pull work items and PRs from
-    "relatedProjects": [p.strip() for p in env.get("ADO_RELATED_PROJECTS", "").split(",") if p.strip()],
+    # (ADO_PR_PROJECTS is the older key name, kept for backwards compatibility)
+    "relatedProjects": [p.strip() for p in env.get("ADO_RELATED_PROJECTS", env.get("ADO_PR_PROJECTS", "")).split(",") if p.strip()],
 }
 
 # Warn if .env is missing or empty so the user knows to set it up
@@ -159,7 +160,7 @@ class ReusableTCPServer(socketserver.TCPServer):
 
 loaded_keys = [k for k in [
     "ADO_ORG_URL","ADO_PROJECT","ADO_TEAM","ADO_MEMBERS",
-    "ADO_RELATED_PROJECTS",
+    "ADO_RELATED_PROJECTS","ADO_PR_PROJECTS",
     "ADO_SPRINT_MODE","ADO_SPRINT_START_DATE",
     "ADO_ITERATION_COUNT","ADO_SPRINT_COUNT",
     "ADO_DESIGN_REVIEW",

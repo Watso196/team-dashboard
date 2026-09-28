@@ -150,37 +150,59 @@ function buildSparkline(values, color=null, W=72, H=20) {
 }
 
 // ── TEAM TAB ──────────────────────────────────────────────────────────────────
-function renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm) {
+function renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm, range) {
   const members = CFG.members;
+  const rng = range || describeRange(historyIters);
+
+  const sum = key => members.reduce((s,m)=>s+(md[m][key]||0), 0);
 
   const teamEffortDone    = members.reduce((s,m)=>s+md[m].effortDone, 0);
   const teamItemsDone     = members.reduce((s,m)=>s+md[m].itemsDoneThisSprint, 0);
   const teamHours         = members.reduce((s,m)=>s+md[m].hoursThisSprint, 0);
   const teamPBIs          = members.reduce((s,m)=>s+md[m].pbisChanged.size, 0);
   const teamBugs          = members.reduce((s,m)=>s+md[m].bugsChanged.size, 0);
-  const teamPRReviews3mo  = members.reduce((s,m)=>s+md[m].prsReviewed3mo, 0);
-  const teamPRsAuthored3mo= members.reduce((s,m)=>s+md[m].prsAuthored3mo, 0);
+  const teamPRReviews3mo  = sum('prsReviewed3mo');
+  const teamPRsAuthored3mo= sum('prsAuthored3mo');
+  const teamPRReviewsRange  = sum('prsReviewedRange');
+  const teamPRsAuthoredRange= sum('prsAuthoredRange');
+  const teamPeerReviewRange = sum('peerReviewTaskCountRange');
+  const teamPBIsCreatedRange= sum('pbisCreatedRange');
+  const teamBugsCreatedRange= sum('bugsCreatedRange');
   const allCompletionDays = members.flatMap(m=>md[m].completionDays);
   const teamAvgTurnaround = avg(allCompletionDays);
+  const teamAvgTurnaroundRange = avg(members.flatMap(m=>md[m].completionDaysRange||[]));
 
   const keys    = historyIters.map(i=>normPath(i.path));
   const lastKey = keys[keys.length-1]||'';
   const keys6mo = keys.filter(k=>iters6moNorm.has(k)||k===lastKey);
   const keys3mo = keys.filter(k=>iters3moNorm.has(k)||k===lastKey);
+  const keysRange = keys; // every sprint the user asked for
 
   const teamEffortPerSprint = (ks) => avg(ks.map(k => members.reduce((s,m)=>s+(md[m].history[k]?.effort??0),0)));
   const teamItemsPerSprint  = (ks) => avg(ks.map(k => members.reduce((s,m)=>s+(md[m].history[k]?.itemCount??0),0)));
+  const teamHoursPerSprint  = (ks) => avg(ks.map(k => members.reduce((s,m)=>s+(md[m].history[k]?.hours??0),0)));
   const vel3mo   = teamEffortPerSprint(keys3mo);
   const vel6mo   = teamEffortPerSprint(keys6mo);
   const items3mo = teamItemsPerSprint(keys3mo);
   const items6mo = teamItemsPerSprint(keys6mo);
+  const velRange   = teamEffortPerSprint(keysRange);
+  const itemsRange = teamItemsPerSprint(keysRange);
+  const hoursRange = teamHoursPerSprint(keysRange);
+  const totalEffortRange = keysRange.reduce((s,k)=>s+members.reduce((t,m)=>t+(md[m].history[k]?.effort??0),0), 0);
+  const totalItemsRange  = keysRange.reduce((s,k)=>s+members.reduce((t,m)=>t+(md[m].history[k]?.itemCount??0),0), 0);
+  const totalHoursRange  = keysRange.reduce((s,k)=>s+members.reduce((t,m)=>t+(md[m].history[k]?.hours??0),0), 0);
   let html = '';
 
-  // Design review team stats
+  // Design review team stats. designReviewItems now spans the selected range,
+  // so the 3mo preset reads off the per-item in3mo flag.
   const drEnabled = CFG.designReviewEnabled;
-  const allDRItems = drEnabled ? members.flatMap(m => md[m].designReviewItems) : [];
-  const teamDRAvg  = drEnabled && allDRItems.length ? avg(allDRItems.map(i => i.addCount)) : null;
-  const teamDRFlagged = drEnabled ? members.reduce((s,m) => s + md[m].designReviewFlagged.length, 0) : 0;
+  const allDRItems     = drEnabled ? members.flatMap(m => md[m].designReviewItems) : [];
+  const allDRItems3mo  = allDRItems.filter(i => i.in3mo !== false);
+  const allDRFlagged   = drEnabled ? members.flatMap(m => md[m].designReviewFlagged) : [];
+  const teamDRAvg      = allDRItems3mo.length ? avg(allDRItems3mo.map(i => i.addCount)) : null;
+  const teamDRAvgRange = allDRItems.length    ? avg(allDRItems.map(i => i.addCount))    : null;
+  const teamDRFlagged      = allDRFlagged.filter(i => i.in3mo !== false).length;
+  const teamDRFlaggedRange = allDRFlagged.length;
 
   // ── Current sprint stats ─────────────────────────────────────────────────
   const teamPRsAuthoredThisSprint = CFG.relatedProjects?.length
@@ -210,6 +232,27 @@ function renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm
     ${drEnabled ? `<div class="stat-cell"><div class="stat-label">Items w/ Repeated Design Reviews</div><div class="stat-value ${teamDRFlagged>0?'accent2':''}">${teamDRFlagged}</div><div class="stat-sub">across team · 3mo</div></div>` : ''}
   </div>`;
 
+  // ── Selected sprint range ────────────────────────────────────────────────
+  // Same metrics, but over exactly the sprints the user asked to load rather
+  // than a fixed 3/6 month preset.
+  html += `<h2 class="section-title" style="margin-top:2rem;">SELECTED RANGE — ${esc(rng.label)}</h2>`;
+  html += `<div class="stat-grid">
+    <div class="stat-cell"><div class="stat-label">Total effort pts</div><div class="stat-value accent">${fmtInt(totalEffortRange)}</div><div class="stat-sub">${rng.short}</div></div>
+    <div class="stat-cell"><div class="stat-label">Total items done</div><div class="stat-value accent4">${totalItemsRange}</div><div class="stat-sub">PBIs + Bugs closed</div></div>
+    <div class="stat-cell"><div class="stat-label">Total hours logged</div><div class="stat-value">${fmt(totalHoursRange)}</div><div class="stat-sub">${rng.short}</div></div>
+    <div class="stat-cell"><div class="stat-label">Avg pts / sprint</div><div class="stat-value">${velRange!==null?fmt(velRange,1)+' pts':'—'}</div><div class="stat-sub">${rng.short}</div></div>
+    <div class="stat-cell"><div class="stat-label">Avg items / sprint</div><div class="stat-value accent4">${itemsRange!==null?fmt(itemsRange,1):'—'}</div><div class="stat-sub">${rng.short}</div></div>
+    <div class="stat-cell"><div class="stat-label">Avg hrs / sprint</div><div class="stat-value">${hoursRange!==null?fmt(hoursRange,1)+' h':'—'}</div><div class="stat-sub">${rng.short}</div></div>
+    <div class="stat-cell"><div class="stat-label">Avg turnaround</div><div class="stat-value accent3">${teamAvgTurnaroundRange!==null?fmt(teamAvgTurnaroundRange,1)+' days':'—'}</div><div class="stat-sub">PBI start→done</div></div>
+    ${CFG.relatedProjects?.length ? `<div class="stat-cell"><div class="stat-label">PRs reviewed</div><div class="stat-value">${teamPRReviewsRange}</div><div class="stat-sub">${rng.short}</div></div>` : ''}
+    ${CFG.relatedProjects?.length ? `<div class="stat-cell"><div class="stat-label">PRs authored</div><div class="stat-value accent4">${teamPRsAuthoredRange}</div><div class="stat-sub">${rng.short}</div></div>` : ''}
+    <div class="stat-cell"><div class="stat-label">Peer review tasks</div><div class="stat-value accent3">${teamPeerReviewRange}</div><div class="stat-sub">${rng.short}</div></div>
+    <div class="stat-cell"><div class="stat-label">PBIs created</div><div class="stat-value">${teamPBIsCreatedRange}</div><div class="stat-sub">${rng.short}</div></div>
+    <div class="stat-cell"><div class="stat-label">Bugs created</div><div class="stat-value accent2">${teamBugsCreatedRange}</div><div class="stat-sub">${rng.short}</div></div>
+    ${drEnabled ? `<div class="stat-cell"><div class="stat-label">Avg Design Reviews / Item</div><div class="stat-value ${teamDRAvgRange!==null&&teamDRAvgRange>1?'accent2':''}">${teamDRAvgRange!==null?fmt(teamDRAvgRange,1):'—'}</div><div class="stat-sub">target: 1.0</div></div>` : ''}
+    ${drEnabled ? `<div class="stat-cell"><div class="stat-label">Items w/ Repeated Design Reviews</div><div class="stat-value ${teamDRFlaggedRange>0?'accent2':''}">${teamDRFlaggedRange}</div><div class="stat-sub">across team</div></div>` : ''}
+  </div>`;
+
   // DR flagged items — own section with an explicit show/hide button
   if (drEnabled) {
     const allFlagged = members
@@ -217,7 +260,7 @@ function renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm
       .sort((a,b) => b.addCount - a.addCount);
 
     html += `<h2 class="section-title" style="margin-top:2rem;display:flex;align-items:center;justify-content:space-between;">
-      <span>ITEMS WITH REPEATED DESIGN REVIEWS</span>
+      <span>ITEMS WITH REPEATED DESIGN REVIEWS <span class="section-note">${esc(rng.label)}</span></span>
       ${allFlagged.length > 0
         ? `<button aria-label="Show items with repeated design reviews (${allFlagged.length})" onclick="
             var p=document.getElementById('team-dr-list');
@@ -248,7 +291,7 @@ function renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm
       });
       html += `</div>`;
     } else {
-      html += `<div style="background:var(--surface);border:1px solid var(--border);padding:0.85rem 1rem;font-family:'DM Mono',monospace;font-size:0.78rem;color:var(--muted);">No items required more than one Design Review in the last 3 months.</div>`;
+      html += `<div style="background:var(--surface);border:1px solid var(--border);padding:0.85rem 1rem;font-family:'DM Mono',monospace;font-size:0.78rem;color:var(--muted);">No items required more than one Design Review across ${esc(rng.label)}.</div>`;
     }
   }
 
@@ -314,25 +357,45 @@ function renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm
 }
 
 // ── MEMBER TAB ────────────────────────────────────────────────────────────────
-function renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6moNorm) {
+function renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6moNorm, range) {
   const d    = md[m];
+  const rng  = range || describeRange(historyIters);
   const slug = m.replace(/\s+/g,'-').replace(/[^a-zA-Z0-9-]/g,'');
   const keys = historyIters.map(i=>normPath(i.path));
   const lastKey = keys[keys.length-1]||'';
   const keys3mo = keys.filter(k=>iters3moNorm.has(k)||k===lastKey);
   const keys6mo = keys.filter(k=>iters6moNorm.has(k)||k===lastKey);
+  const keysRange = keys; // every sprint the user asked for
 
-  const vel3mo  = avg(keys3mo.map(k=>d.history[k]?.effort??0));
-  const vel6mo  = avg(keys6mo.map(k=>d.history[k]?.effort??0));
-  const items3moAvg = avg(keys3mo.map(k=>d.history[k]?.itemCount??0));
-  const items6moAvg = avg(keys6mo.map(k=>d.history[k]?.itemCount??0));
-  const hrs3mo  = avg(keys3mo.map(k=>d.history[k]?.hours??0));
-  const hrs6mo  = avg(keys6mo.map(k=>d.history[k]?.hours??0));
-  const pr3mo   = avg(keys3mo.map(k=>d.history[k]?.peerReviewCount??0));
-  const pr6mo   = avg(keys6mo.map(k=>d.history[k]?.peerReviewCount??0));
+  const hist  = (ks, field) => ks.map(k => d.history[k]?.[field] ?? 0);
+  const total = (ks, field) => hist(ks, field).reduce((a,b)=>a+b, 0);
+
+  const vel3mo  = avg(hist(keys3mo,'effort'));
+  const vel6mo  = avg(hist(keys6mo,'effort'));
+  const velRange = avg(hist(keysRange,'effort'));
+  const items3moAvg = avg(hist(keys3mo,'itemCount'));
+  const items6moAvg = avg(hist(keys6mo,'itemCount'));
+  const itemsRangeAvg = avg(hist(keysRange,'itemCount'));
+  const hrs3mo  = avg(hist(keys3mo,'hours'));
+  const hrs6mo  = avg(hist(keys6mo,'hours'));
+  const hrsRange = avg(hist(keysRange,'hours'));
+  const pr3mo   = avg(hist(keys3mo,'peerReviewCount'));
+  const pr6mo   = avg(hist(keys6mo,'peerReviewCount'));
+  const prRange = avg(hist(keysRange,'peerReviewCount'));
+  const totalEffortRange = total(keysRange,'effort');
+  const totalItemsRange  = total(keysRange,'itemCount');
+  const totalHoursRange  = total(keysRange,'hours');
   const avgComp = avg(d.completionDays);
+  const avgCompRange = avg(d.completionDaysRange||[]);
   const totalItems = d.pbisChanged.size + d.bugsChanged.size;
   const hoursPerItem = totalItems > 0 ? d.hoursThisSprint / totalItems : null;
+
+  const drItems      = d.designReviewItems || [];
+  const drItems3mo   = drItems.filter(i => i.in3mo !== false);
+  const drFlagged    = d.designReviewFlagged || [];
+  const drFlagged3mo = drFlagged.filter(i => i.in3mo !== false);
+  const drAvg3mo     = drItems3mo.length ? avg(drItems3mo.map(i=>i.addCount)) : null;
+  const drAvgRange   = drItems.length    ? avg(drItems.map(i=>i.addCount))    : null;
 
   let html = `<div class="member-layout">`;
 
@@ -360,40 +423,53 @@ function renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6m
     </table>
   </div>`;
 
-  html += `<h2 class="section-title" style="margin-top:2rem;">AVERAGES OVER TIME</h2>`;
+  html += `<h2 class="section-title" style="margin-top:2rem;">AVERAGES OVER TIME <span class="section-note">selected range: ${esc(rng.label)}</span></h2>`;
   html += `<div style="background:var(--surface);border:1px solid var(--muted2);padding:1.25rem;border-radius:12px;">
     <table class="metrics-table"><caption class="sr-only">Historical averages for ${esc(m)}</caption>
       <tr class="metric-section-row"><td colspan="2">VELOCITY (effort pts)</td></tr>
       <tr class="data-row"><td class="metric-label">Avg / sprint (3mo)</td><td class="metric-value accent">${vel3mo!==null?fmt(vel3mo,1)+' pts':'—'}</td></tr>
       <tr class="data-row"><td class="metric-label">Avg / sprint (6mo)</td><td class="metric-value">${vel6mo!==null?fmt(vel6mo,1)+' pts':'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Avg / sprint (${esc(rng.short)})</td><td class="metric-value accent4">${velRange!==null?fmt(velRange,1)+' pts':'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Total (${esc(rng.short)})</td><td class="metric-value accent4">${fmtInt(totalEffortRange)} pts</td></tr>
 
       <tr class="metric-section-row"><td colspan="2">ITEMS DONE (PBIs + Bugs)</td></tr>
       <tr class="data-row"><td class="metric-label">Avg items / sprint (3mo)</td><td class="metric-value accent">${items3moAvg!==null?fmt(items3moAvg,1):'—'}</td></tr>
       <tr class="data-row"><td class="metric-label">Avg items / sprint (6mo)</td><td class="metric-value">${items6moAvg!==null?fmt(items6moAvg,1):'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Avg items / sprint (${esc(rng.short)})</td><td class="metric-value accent4">${itemsRangeAvg!==null?fmt(itemsRangeAvg,1):'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Total items (${esc(rng.short)})</td><td class="metric-value accent4">${totalItemsRange}</td></tr>
 
       <tr class="metric-section-row"><td colspan="2">HOURS</td></tr>
       <tr class="data-row"><td class="metric-label">Avg hrs / sprint (3mo)</td><td class="metric-value">${hrs3mo!==null?fmt(hrs3mo)+' h':'—'}</td></tr>
       <tr class="data-row"><td class="metric-label">Avg hrs / sprint (6mo)</td><td class="metric-value">${hrs6mo!==null?fmt(hrs6mo)+' h':'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Avg hrs / sprint (${esc(rng.short)})</td><td class="metric-value accent4">${hrsRange!==null?fmt(hrsRange)+' h':'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Total hrs (${esc(rng.short)})</td><td class="metric-value accent4">${fmt(totalHoursRange)} h</td></tr>
 
       <tr class="metric-section-row"><td colspan="2">COMPLETION TIME</td></tr>
       <tr class="data-row"><td class="metric-label">Avg start → done (3mo)</td><td class="metric-value accent3">${avgComp!==null?fmt(avgComp,1)+' days':'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Avg start → done (${esc(rng.short)})</td><td class="metric-value accent3">${avgCompRange!==null?fmt(avgCompRange,1)+' days':'—'}</td></tr>
 
       ${CFG.designReviewEnabled ? `
-      <tr class="metric-section-row"><td colspan="2">DESIGN REVIEW CYCLING (3mo)</td></tr>
+      <tr class="metric-section-row"><td colspan="2">DESIGN REVIEW CYCLING</td></tr>
       <tr class="data-row">
-        <td class="metric-label">Avg Design Reviews / Item</td>
-        <td class="metric-value ${d.designReviewItems.length && avg(d.designReviewItems.map(i=>i.addCount))>1?'accent2':'accent'}">
-          ${d.designReviewItems.length ? fmt(avg(d.designReviewItems.map(i=>i.addCount)),1) : '—'}
+        <td class="metric-label">Avg Design Reviews / Item (3mo)</td>
+        <td class="metric-value ${drAvg3mo!==null&&drAvg3mo>1?'accent2':'accent'}">
+          ${drAvg3mo!==null ? fmt(drAvg3mo,1) : '—'}
+        </td>
+      </tr>
+      <tr class="data-row range-row">
+        <td class="metric-label">Avg Design Reviews / Item (${esc(rng.short)})</td>
+        <td class="metric-value ${drAvgRange!==null&&drAvgRange>1?'accent2':'accent4'}">
+          ${drAvgRange!==null ? fmt(drAvgRange,1) : '—'}
         </td>
       </tr>
       <tr class="data-row drillable" tabindex="0" role="button" aria-expanded="false" onclick="toggleDrill('drill-dr-all-${slug}',this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDrill('drill-dr-all-${slug}',this)}">
         <td class="metric-label">Items that entered Design Review <span class="drill-icon">▾</span></td>
-        <td class="metric-value">${d.designReviewItems.length||'0'}</td>
+        <td class="metric-value">${drItems3mo.length||'0'} <span class="range-inline">· ${drItems.length} in ${esc(rng.short)}</span></td>
       </tr>
       <tr><td colspan="2" style="padding:0;"><div class="drill-panel" id="drill-dr-all-${slug}"></div></td></tr>
       <tr class="data-row drillable" tabindex="0" role="button" aria-expanded="false" onclick="toggleDrill('drill-dr-flagged-${slug}',this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDrill('drill-dr-flagged-${slug}',this)}">
         <td class="metric-label">Items w/ Repeated Design Reviews <span class="drill-icon">▾</span></td>
-        <td class="metric-value ${d.designReviewFlagged.length>0?'accent2':''}">${d.designReviewFlagged.length||'0'}</td>
+        <td class="metric-value ${drFlagged3mo.length>0?'accent2':''}">${drFlagged3mo.length||'0'} <span class="range-inline">· ${drFlagged.length} in ${esc(rng.short)}</span></td>
       </tr>
       <tr><td colspan="2" style="padding:0;"><div class="drill-panel" id="drill-dr-flagged-${slug}"></div></td></tr>
       ` : ''}
@@ -401,15 +477,22 @@ function renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6m
       ${CFG.relatedProjects?.length ? `<tr class="metric-section-row"><td colspan="2">PULL REQUESTS</td></tr>
       <tr class="data-row"><td class="metric-label">PRs authored (3mo)</td><td class="metric-value accent4">${d.prsAuthored3mo}</td></tr>
       <tr class="data-row"><td class="metric-label">PRs authored (6mo)</td><td class="metric-value">${d.prsAuthored6mo}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">PRs authored (${esc(rng.short)})</td><td class="metric-value accent4">${d.prsAuthoredRange??'—'}</td></tr>
       <tr class="data-row"><td class="metric-label">PRs reviewed (3mo)</td><td class="metric-value accent4">${d.prsReviewed3mo}</td></tr>
-      <tr class="data-row"><td class="metric-label">PRs reviewed (6mo)</td><td class="metric-value">${d.prsReviewed6mo}</td></tr>` : ''}
+      <tr class="data-row"><td class="metric-label">PRs reviewed (6mo)</td><td class="metric-value">${d.prsReviewed6mo}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">PRs reviewed (${esc(rng.short)})</td><td class="metric-value accent4">${d.prsReviewedRange??'—'}</td></tr>` : ''}
       <tr class="data-row"><td class="metric-label">Peer review tasks / sprint (3mo avg)</td><td class="metric-value">${pr3mo!==null?fmt(pr3mo,1):'—'}</td></tr>
       <tr class="data-row"><td class="metric-label">Peer review tasks / sprint (6mo avg)</td><td class="metric-value">${pr6mo!==null?fmt(pr6mo,1):'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Peer review tasks / sprint (${esc(rng.short)} avg)</td><td class="metric-value accent4">${prRange!==null?fmt(prRange,1):'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Peer review tasks total (${esc(rng.short)})</td><td class="metric-value accent4">${d.peerReviewTaskCountRange??'—'}</td></tr>
       <tr class="data-row"><td class="metric-label">Avg hrs per review task (3mo)</td><td class="metric-value accent3">${d.peerReviewHoursPerTask3mo!==null?fmt(d.peerReviewHoursPerTask3mo)+' h':'—'}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Avg hrs per review task (${esc(rng.short)})</td><td class="metric-value accent3">${d.peerReviewHoursPerTaskRange!==null&&d.peerReviewHoursPerTaskRange!==undefined?fmt(d.peerReviewHoursPerTaskRange)+' h':'—'}</td></tr>
 
-      <tr class="metric-section-row"><td colspan="2">ITEMS CREATED (3mo)</td></tr>
-      <tr class="data-row"><td class="metric-label">PBIs created</td><td class="metric-value">${d.pbisCreated3mo}</td></tr>
-      <tr class="data-row"><td class="metric-label">Bugs created</td><td class="metric-value accent2">${d.bugsCreated3mo}</td></tr>
+      <tr class="metric-section-row"><td colspan="2">ITEMS CREATED</td></tr>
+      <tr class="data-row"><td class="metric-label">PBIs created (3mo)</td><td class="metric-value">${d.pbisCreated3mo}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">PBIs created (${esc(rng.short)})</td><td class="metric-value accent4">${d.pbisCreatedRange??'—'}</td></tr>
+      <tr class="data-row"><td class="metric-label">Bugs created (3mo)</td><td class="metric-value accent2">${d.bugsCreated3mo}</td></tr>
+      <tr class="data-row range-row"><td class="metric-label">Bugs created (${esc(rng.short)})</td><td class="metric-value accent2">${d.bugsCreatedRange??'—'}</td></tr>
     </table>
   </div>`;
 
@@ -420,15 +503,22 @@ function renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6m
 
   // PR Comments box
   if (CFG.relatedProjects?.length) {
+    // One API call per PR, so surface the cost on the button before they click.
+    const prsInRange = d.prsReviewedRange ?? d.prsReviewed3mo;
     html += `<h2 class="section-title">CODE REVIEW FOCUS</h2>
     <div class="pr-summary-box">
       <div class="psb-header">
-        <span class="psb-title">PR Review Comments (3mo)</span>
-        <button class="btn-summarize" id="btn-sum-${slug}" onclick="fetchComments('${slug}','${m.replace(/'/g, "\\'")}')">
-          &#8595; Load Comments
-        </button>
+        <span class="psb-title">PR Review Comments <span class="section-note">${esc(rng.label)}</span></span>
+        <span class="psb-actions">
+          <button class="btn-summarize" id="btn-sum-${slug}" onclick="fetchComments('${slug}','${m.replace(/'/g, "\\'")}')">
+            &#8595; Load Comments${prsInRange ? ` (${prsInRange} PRs)` : ''}
+          </button>
+          <button class="btn-summarize btn-cancel-fetch" id="btn-cancel-${slug}" style="display:none;" onclick="cancelComments('${slug}')">
+            Stop
+          </button>
+        </span>
       </div>
-      <div class="psb-comment-count">${d.prsReviewed3mo} PRs reviewed · comments fetched on demand</div>
+      <div class="psb-comment-count" id="psb-count-${slug}">${prsInRange} PRs reviewed in range · comments fetched on demand</div>
       <button type="button" class="psb-comments-toggle" id="psb-comments-toggle-${slug}" style="display:none;"
            aria-expanded="false"
            onclick="toggleDrill('psb-comments-${slug}', this)"
@@ -459,17 +549,26 @@ function renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6m
   html += `<h2 class="section-title" style="margin-top:1.5rem;">VELOCITY TREND — HOURS LOGGED</h2>`;
   html += `<div class="chart-wrap">${buildBarChart(hoursChartData, '--accent4', 'h')}</div>`;
 
+  const turnaroundBuckets = days => [
+    { label:'<1d',  value: days.filter(x=>x<1).length,        isCurrent:false },
+    { label:'1-3d', value: days.filter(x=>x>=1&&x<3).length,  isCurrent:false },
+    { label:'3-7d', value: days.filter(x=>x>=3&&x<7).length,  isCurrent:false },
+    { label:'1-2w', value: days.filter(x=>x>=7&&x<14).length, isCurrent:false },
+    { label:'2-4w', value: days.filter(x=>x>=14&&x<28).length,isCurrent:true  },
+    { label:'>4w',  value: days.filter(x=>x>=28).length,      isCurrent:false },
+  ];
+
   if (d.completionDays.length > 0) {
-    const buckets = [
-      { label:'<1d',  value: d.completionDays.filter(x=>x<1).length,        isCurrent:false },
-      { label:'1-3d', value: d.completionDays.filter(x=>x>=1&&x<3).length,  isCurrent:false },
-      { label:'3-7d', value: d.completionDays.filter(x=>x>=3&&x<7).length,  isCurrent:false },
-      { label:'1-2w', value: d.completionDays.filter(x=>x>=7&&x<14).length, isCurrent:false },
-      { label:'2-4w', value: d.completionDays.filter(x=>x>=14&&x<28).length,isCurrent:true  },
-      { label:'>4w',  value: d.completionDays.filter(x=>x>=28).length,      isCurrent:false },
-    ];
     html += `<h2 class="section-title" style="margin-top:1.5rem;">TURNAROUND DISTRIBUTION (3MO)</h2>`;
-    html += `<div class="chart-wrap"><div class="chart-title">Number of PBIs by time-to-complete</div>${buildBarChart(buckets, '--accent3', 'items', 100)}</div>`;
+    html += `<div class="chart-wrap"><div class="chart-title">Number of PBIs by time-to-complete</div>${buildBarChart(turnaroundBuckets(d.completionDays), '--accent3', 'items', 100)}</div>`;
+  }
+
+  // Only worth a second chart when the selected range holds items the 3mo
+  // preset doesn't already cover.
+  const rangeDays = d.completionDaysRange || [];
+  if (rangeDays.length > 0 && rangeDays.length !== d.completionDays.length) {
+    html += `<h2 class="section-title" style="margin-top:1.5rem;">TURNAROUND DISTRIBUTION — ${esc(rng.short.toUpperCase())}</h2>`;
+    html += `<div class="chart-wrap"><div class="chart-title">Number of PBIs by time-to-complete · ${esc(rng.label)}</div>${buildBarChart(turnaroundBuckets(rangeDays), '--accent4', 'items', 100)}</div>`;
   }
 
   html += `</div>`; // end main
@@ -537,58 +636,122 @@ function buildMemberHistoryTable(d, historyIters, memberSlug) {
 }
 
 // ── PR COMMENTS ───────────────────────────────────────────────────────────────
+// Comments are fetched over the full selected sprint range. That is one API
+// call per PR, so a long range means a long fetch — hence the live progress
+// counter, the cancel button, and incremental rendering as results land.
+const COMMENT_FETCH = {};   // slug → { cancelled: bool }
+
+function prListForRange(d) {
+  const range = RENDER_DATA?.range;
+  const prs = d._prList || [];
+  // Fallback matches the 3mo preset used everywhere else (calendar months, not
+  // a flat 90 days) so the comment list can't disagree with the PR counts.
+  const inRange = range?.start
+    ? p => p.closedDate >= range.start && p.closedDate <= addDays(range.end, 1)
+    : p => p.closedDate >= subMonths(new Date(), 3);
+  return prs.filter(inRange).sort((a,b) => b.closedDate - a.closedDate);
+}
+
+function cancelComments(slug) {
+  const state = COMMENT_FETCH[slug];
+  if (state) state.cancelled = true;
+}
+
+function renderCommentList(slug, comments, prCount, truncated) {
+  const dropEl = document.getElementById(`psb-comments-${slug}`);
+  if (!dropEl) return;
+  if (!comments.length) {
+    dropEl.innerHTML = '<div class="drill-empty">No comments found in these PRs.</div>';
+    return;
+  }
+  const sorted = [...comments].sort((a,b) => (b.date?.getTime()||0) - (a.date?.getTime()||0));
+  const rows = sorted.map((c,i) => {
+    const when = c.date ? c.date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+    return `<div class="psb-comment-item">
+      <span class="psb-comment-num">${i+1}</span>
+      <div class="psb-comment-body">
+        <div class="psb-comment-meta">
+          <a href="${c.prUrl}" target="_blank">PR !${c.prId}<span class="sr-only"> (opens in new tab)</span></a>
+          ${c.repoName ? `<span class="proj-badge">${esc(c.repoName)}</span>` : ''}
+          ${when ? `<span class="psb-comment-date">${esc(when)}</span>` : ''}
+        </div>
+        <span class="psb-comment-text">${esc(c.text)}</span>
+      </div>
+      <a class="psb-comment-link" href="${c.prUrl}" target="_blank" aria-label="Open PR ${c.prId} (opens in new tab)">↗</a>
+    </div>`;
+  }).join('');
+  const note = truncated ? `<div class="drill-empty">Cancelled — showing comments from the ${prCount} PRs fetched so far.</div>` : '';
+  dropEl.innerHTML = `<div class="psb-comments-inner">${note}${rows}</div>`;
+}
+
+function setCommentSummary(slug, text) {
+  const el = document.getElementById(`psb-count-${slug}`);
+  if (el) el.textContent = text;
+}
+
+function showCommentToggle(slug) {
+  const toggle = document.getElementById(`psb-comments-toggle-${slug}`);
+  if (!toggle) return;
+  toggle.style.display = 'flex';
+  toggle.setAttribute('aria-expanded', 'true');
+  const commentsEl = document.getElementById(`psb-comments-${slug}`);
+  if (commentsEl) commentsEl.style.display = 'block';
+  const span = toggle.querySelector('span');
+  if (span) span.textContent = '▼ Hide individual comments';
+}
+
 async function fetchComments(slug, memberName) {
   const btn = document.getElementById(`btn-sum-${slug}`);
   if (!btn) return;
-  btn.disabled = true;
-  btn.textContent = '…fetching';
-
+  const cancelBtn = document.getElementById(`btn-cancel-${slug}`);
   const d = RENDER_DATA?.md?.[memberName];
-  if (!d) { btn.textContent = '↓ Load Comments'; btn.disabled=false; return; }
+  if (!d) return;
 
-  const prList3mo = (d._prList||[]).filter(p=>p.closedDate>=new Date(Date.now()-THREE_MONTHS_DAYS*MS_PER_DAY));
-  if (!prList3mo.length) {
+  const prList = prListForRange(d);
+  if (!prList.length) {
     const dropEl = document.getElementById(`psb-comments-${slug}`);
-    if (dropEl) dropEl.innerHTML = '<div class="drill-empty">No PR reviews found in the last 3 months.</div>';
-    const toggle = document.getElementById(`psb-comments-toggle-${slug}`);
-    if (toggle) toggle.style.display = 'flex';
-    btn.textContent = '↓ Reload'; btn.disabled=false;
+    if (dropEl) dropEl.innerHTML = '<div class="drill-empty">No PR reviews found in the selected range.</div>';
+    showCommentToggle(slug);
     return;
   }
 
+  const state = { cancelled: false };
+  COMMENT_FETCH[slug] = state;
+  btn.disabled = true;
+  if (cancelBtn) cancelBtn.style.display = '';
+
   const allComments = [];
-  for (let i=0; i<prList3mo.length; i+=PR_COMMENT_BATCH) {
-    const batch = prList3mo.slice(i,i+PR_COMMENT_BATCH);
-    const results = await Promise.all(batch.map(p => fetchPRCommentsByMember(p.repoId, p.repoName, p.repoProject, p.prId)));
+  let done = 0, batchNo = 0;
+  for (let i = 0; i < prList.length; i += PR_COMMENT_BATCH) {
+    if (state.cancelled) break;
+    const batch = prList.slice(i, i + PR_COMMENT_BATCH);
+    const results = await Promise.all(
+      batch.map(p => fetchPRCommentsByMember(p.repoId, p.repoName, p.repoProject, p.prId))
+    );
     for (const byMember of results) {
       if (byMember[memberName]) allComments.push(...byMember[memberName]);
     }
-    btn.textContent = `…fetching (${Math.min(i+PR_COMMENT_BATCH,prList3mo.length)}/${prList3mo.length})`;
+    done += batch.length;
+    batchNo++;
+    btn.textContent = `…${done}/${prList.length} PRs`;
+    setCommentSummary(slug, `${allComments.length} comments from ${done} of ${prList.length} PRs…`);
+    // Paint as we go so long fetches show something useful immediately, but
+    // not every batch — re-rendering a growing list each time gets quadratic.
+    if (batchNo === 1 || batchNo % 5 === 0) {
+      renderCommentList(slug, allComments, done, false);
+      if (batchNo === 1) showCommentToggle(slug);
+    }
   }
 
-  const dropEl = document.getElementById(`psb-comments-${slug}`);
-  if (dropEl) {
-    const listHtml = allComments.length
-      ? allComments.map((c,i) =>
-          `<div class="psb-comment-item">
-            <span class="psb-comment-num">${i+1}</span>
-            <span class="psb-comment-text">${esc(c.text)}</span>
-            <a class="psb-comment-link" href="${c.prUrl}" target="_blank" aria-label="Open PR (opens in new tab)">↗</a>
-          </div>`
-        ).join('')
-      : '<div class="drill-empty">No comments found in these PRs.</div>';
-    dropEl.innerHTML = `<div class="psb-comments-inner">${listHtml}</div>`;
-  }
+  const cancelled = state.cancelled;
+  delete COMMENT_FETCH[slug];
+  renderCommentList(slug, allComments, done, cancelled);
+  setCommentSummary(slug,
+    `${allComments.length} comment${allComments.length===1?'':'s'} across ${done} PR${done===1?'':'s'}`
+    + (cancelled ? ` (cancelled — ${prList.length - done} not fetched)` : ''));
+  showCommentToggle(slug);
 
-  const toggle = document.getElementById(`psb-comments-toggle-${slug}`);
-  if (toggle) {
-    toggle.style.display = 'flex';
-    const commentsEl = document.getElementById(`psb-comments-${slug}`);
-    if (commentsEl) commentsEl.style.display = 'block';
-    const span = toggle.querySelector('span');
-    if (span) span.textContent = '▼ Hide individual comments';
-  }
-
+  if (cancelBtn) cancelBtn.style.display = 'none';
   btn.textContent = '↓ Reload';
   btn.disabled = false;
 }
@@ -643,15 +806,17 @@ function switchToMember(idx) {
 }
 
 // ── RENDER ────────────────────────────────────────────────────────────────────
-function render({ md, currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm }) {
-  RENDER_DATA = { md, currentIter, historyIters, iters3moNorm, iters6moNorm };
+function render({ md, currentIter, sprintStart, sprintEnd, historyIters, iters3moNorm, iters6moNorm, range }) {
+  const rng = range || describeRange(historyIters);
+  RENDER_DATA = { md, currentIter, historyIters, iters3moNorm, iters6moNorm, range: rng };
 
   const sStart = sprintStart.toLocaleDateString('en-US',{month:'short',day:'numeric'});
   const sEnd   = sprintEnd.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const current = CFG.sprintMode === 'dates'
+    ? `Sprint window: <span>${sStart} – ${sEnd}</span>`
+    : `Current Sprint: <span>${currentIter.name}</span> &nbsp;·&nbsp; <span>${sStart} – ${sEnd}</span>`;
   document.getElementById('sprint-label').innerHTML =
-    CFG.sprintMode === 'dates'
-      ? `Sprint window: <span>${sStart} – ${sEnd}</span>`
-      : `Current Sprint: <span>${currentIter.name}</span> &nbsp;·&nbsp; <span>${sStart} – ${sEnd}</span>`;
+    `${current} &nbsp;·&nbsp; Loaded: <span>${esc(rng.label)}</span>`;
 
   buildTabs(CFG.members);
 
@@ -662,7 +827,7 @@ function render({ md, currentIter, sprintStart, sprintEnd, historyIters, iters3m
   teamPanel.id = 'panel-team';
   teamPanel.setAttribute('role', 'tabpanel');
   teamPanel.setAttribute('aria-labelledby', 'tab-team');
-  teamPanel.innerHTML = `<div class="panel-content">${renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm)}</div>`;
+  teamPanel.innerHTML = `<div class="panel-content">${renderTeamTab(md, currentIter, historyIters, iters3moNorm, iters6moNorm, rng)}</div>`;
   panelsEl.appendChild(teamPanel);
 
   CFG.members.forEach((m, idx) => {
@@ -671,7 +836,7 @@ function render({ md, currentIter, sprintStart, sprintEnd, historyIters, iters3m
     panel.id = `panel-member-${idx}`;
     panel.setAttribute('role', 'tabpanel');
     panel.setAttribute('aria-labelledby', `tab-member-${idx}`);
-    panel.innerHTML = `<div class="panel-content">${renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6moNorm)}</div>`;
+    panel.innerHTML = `<div class="panel-content">${renderMemberTab(m, md, currentIter, historyIters, iters3moNorm, iters6moNorm, rng)}</div>`;
     panelsEl.appendChild(panel);
   });
 
